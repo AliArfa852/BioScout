@@ -4,6 +4,8 @@ from collections import Counter
 import os
 import uuid
 import re
+from datetime import datetime, timedelta
+
 from utils import (load_observations, save_observation, load_knowledge_base,
                    query_similar_texts, generate_answer, save_uploaded_image, build_faiss_index)
 
