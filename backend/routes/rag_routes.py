@@ -1,5 +1,6 @@
 from flask import request, jsonify
 from datetime import datetime
+import json
 
 def register_routes(bp, db, rag_system):
     @bp.route('/ask', methods=['POST'])
@@ -19,12 +20,56 @@ def register_routes(bp, db, rag_system):
             user_id = request.headers.get('Authorization')
             
             # Process question through RAG system
-            result = rag_system.ask(data['question'], user_id)
+            user_question = data['question'].strip()
             
-            return jsonify(result), 200
+            # Retrieve relevant context for the question
+            retrieved_snippets = query_similar_texts(user_question, top_k=5)
+            
+            # Generate answer using retrieved context
+            answer = generate_answer(retrieved_snippets, user_question)
+            
+            # Save question and answer to database for history
+            save_qa_to_history(db, user_question, answer, user_id)
+            
+            return jsonify({"answer": answer}), 200
             
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+    
+    @bp.route('/recent', methods=['GET'])
+    def get_recent_questions():
+        """
+        Get recent questions from the QA history
+        """
+        try:
+            # Get limit parameter from query string
+            limit = request.args.get('limit', default=5, type=int)
+            
+            # Get user-specific questions if user ID is provided
+            user_id = request.headers.get('Authorization')
+            
+            # Query database for recent questions
+            query = {}
+            if user_id:
+                query['user_id'] = user_id
+                
+            # Get recent questions from database
+            recent_questions = list(db.qa_history.find(
+                query, 
+                {'_id': 0, 'question': 1, 'answer': 1, 'timestamp': 1}
+            ).sort('timestamp', -1).limit(limit))
+            
+            # Format timestamps to ISO format
+            for item in recent_questions:
+                if 'timestamp' in item and isinstance(item['timestamp'], datetime):
+                    item['timestamp'] = item['timestamp'].isoformat()
+            
+            return jsonify(recent_questions), 200
+        
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+
             
     @bp.route('/history', methods=['GET'])
     def get_chat_history():
@@ -127,3 +172,16 @@ def register_routes(bp, db, rag_system):
             
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+        
+def save_qa_to_history(db, question, answer, user_id=None):
+    """Save question and answer to database for history tracking"""
+    qa_history = {
+        "question": question,
+        "answer": answer,
+        "timestamp": datetime.now(),
+    }
+    
+    if user_id:
+        qa_history["user_id"] = user_id
+        
+    db.qa_history.insert_one(qa_history)

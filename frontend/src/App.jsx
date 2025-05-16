@@ -3,7 +3,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-d
 import ObservationForm from "./components/ObservationForm";
 import ObservationList from "./components/ObservationList";
 import MapPage from "./components/MapPage";
-import QASection from "./components/QASection";
+// Import our enhanced QA section instead of the basic one
+import EnhancedQASection from "./components/EnhancedQASection";
 import TopObserver from "./components/TopObserver";
 import AnalyticsPanel from "./components/AnalyticsPanel";
 import AboutUs from "./components/AboutUs";
@@ -339,7 +340,8 @@ export default function App() {
             
             <Route path="/observations" element={<ObservationList observations={observations} />} />
             <Route path="/map" element={<MapPage observations={observations} />} />
-            <Route path="/qa" element={<QASection />} />
+            {/* Use the enhanced QA section here */}
+            <Route path="/qa" element={<EnhancedQASection />} />
             <Route path="/analytics" element={<AnalyticsPanel />} />
             <Route path="/about" element={<AboutUs />} />
             
@@ -360,7 +362,8 @@ export default function App() {
                 )}
                 <MapPage observations={observations} />
                 <ObservationList observations={observations} />
-                <QASection />
+                {/* Also update the QA section on the home page */}
+                <EnhancedQASection />
                 <AnalyticsPanel />
                 <TopObserver />
               </>

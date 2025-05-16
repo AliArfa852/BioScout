@@ -84,6 +84,44 @@ def serve_image(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 
+# @app.route("/api/qa", methods=["POST"])
+# def qa():
+#     user_question = request.json.get("question", "").strip()
+#     if not user_question:
+#         return jsonify({"error": "Empty question"}), 400
+
+#     try:
+#         # Normalize question text
+#         query = user_question.lower()
+
+#         # Retrieve top relevant snippets from RAG
+#         retrieved_snippets = query_similar_texts(query, top_k=5)
+
+#         # Fallback: If no snippets retrieved, try simple keyword search in knowledge base + observations
+#         if not retrieved_snippets:
+#             kb = load_knowledge_base()
+#             obs_notes = [obs.get("notes", "") for obs in observations if obs.get("notes")]
+#             all_texts = kb + obs_notes
+
+#             keywords = re.findall(r"\w+", query)
+#             retrieved_snippets = []
+#             for text in all_texts:
+#                 if any(kw in text.lower() for kw in keywords):
+#                     retrieved_snippets.append(text)
+#             retrieved_snippets = retrieved_snippets[:5]
+
+#         # If still empty, respond politely
+#         if not retrieved_snippets:
+#             return jsonify({"answer": "Sorry, I couldn't find relevant information. Please try asking differently."})
+
+#         # Generate an answer with the LLM augmented by retrieved context
+#         answer = generate_answer(retrieved_snippets, user_question)
+#         return jsonify({"answer": answer})
+
+#     except Exception as e:
+#         return jsonify({"answer": f"An error occurred while processing your question: {str(e)}"}), 500
+
+
 @app.route("/api/qa", methods=["POST"])
 def qa():
     user_question = request.json.get("question", "").strip()
@@ -116,12 +154,30 @@ def qa():
 
         # Generate an answer with the LLM augmented by retrieved context
         answer = generate_answer(retrieved_snippets, user_question)
-        return jsonify({"answer": answer})
+        
+        # Extract known locations from the answer
+        known_locations = [
+            "Margalla Hills", "Rawal Lake", "Shakarparian", "Pir Sohawa",
+            "Daman-e-Koh", "Faisal Mosque", "Saidpur Village", "Trail 1", 
+            "Trail 2", "Trail 3", "Trail 4", "Trail 5", "Rawal Dam",
+            "Shah Allah Ditta Caves", "Zoo vicinity", "Islamabad University Forest Area"
+        ]
+        
+        mentioned_locations = []
+        for location in known_locations:
+            if location.lower() in answer.lower():
+                mentioned_locations.append(location)
+        
+        return jsonify({
+            "answer": answer,
+            "locations": mentioned_locations
+        })
 
     except Exception as e:
         return jsonify({"answer": f"An error occurred while processing your question: {str(e)}"}), 500
+    
 
-
+    
 @app.route("/api/gamification", methods=["GET"])
 def gamification():
     from collections import Counter
