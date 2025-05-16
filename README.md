@@ -119,28 +119,75 @@ Open your browser at `http://localhost:3000`.
 ## Project Structure
 
 ```
-backend/
-  ├─ app.py                 # Flask backend API
-  ├─ utils.py               # Helper functions for data, AI, file storage
-  ├─ observations.csv       # Biodiversity observation dataset
-  ├─ knowledge_base.txt     # Curated knowledge base snippets
-  ├─ uploads/               # Uploaded images storage
+bioscout-islamabad/
+├── backend/
+│   ├── app.py                      # Updated with new API endpoints
+│   ├── utils.py                    # Utility functions
+│   ├── __init__.py
+│   ├── db.py                       # Database connection
+│   ├── requirements.txt
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── observation.py
+│   │   ├── species.py
+│   │   ├── data_manager.py
+│   │   ├── image_processor.py
+│   │   ├── db_schema.py
+│   │   └── rag_system.py
+│   ├── routes/
+│   │   ├── __init__.py
+│   │   ├── auth_routes.py
+│   │   ├── data_routes.py
+│   │   ├── identify_routes.py
+│   │   ├── leaderboard_routes.py   # New for user stats
+│   │   ├── observation_routes.py
+│   │   ├── rag_routes.py
+│   │   └── species_routes.py
+│   ├── uploads/                    # For image storage
+│   └── data/
+│       ├── observations.csv
+│       └── knowledge_base.txt
+│
+├── frontend/
+│   ├── public/
+│   │   └── index.html
+│   │
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── AboutUs.jsx
+│   │   │   ├── AnalyticsPanel.jsx
+│   │   │   ├── MapPage.jsx
+│   │   │   ├── ObservationForm.jsx
+│   │   │   ├── ObservationList.jsx
+│   │   │   ├── QASection.jsx
+│   │   │   ├── TopObserver.jsx
+│   │   │   │
+│   │   │   └── stats/              # New directory for stats components
+│   │   │       ├── UserStatsHeader.jsx
+│   │   │       ├── RewardsGallery.jsx
+│   │   │       ├── StatsGraph.jsx
+│   │   │       ├── RankingsTable.jsx
+│   │   │       ├── ContributionMap.jsx
+│   │   │       ├── AchievementNotification.jsx
+│   │   │       ├── ChallengeTracker.jsx
+│   │   │       └── MobileStatsDrawer.jsx
+│   │   │
+│   │   ├── StatsPage.jsx           # New page component
+│   │   ├── App.jsx                 # Updated to include new routes
+│   │   ├── index.css               # Updated styles
+│   │   └── index.js                # Entry point
+│   │
+│   ├── package.json
+│   ├── .gitignore
+│   └── README.md
+│
+├── data/                           # Shared data directory
+│   ├── observations.csv
+│   └── knowledge_base.txt
+│
+├── .gitignore
+└── README.md
 
-frontend/
-  ├─ public/
-  │   └─ index.html         # React app root HTML
-  ├─ src/
-  │   ├─ components/
-  │   │   ├─ AboutUs.jsx
-  │   │   ├─ AnalyticsPanel.jsx
-  │   │   ├─ MapPage.jsx
-  │   │   ├─ ObservationForm.jsx
-  │   │   ├─ ObservationList.jsx
-  │   │   ├─ QASection.jsx
-  │   │   └─ TopObserver.jsx
-  │   ├─ App.jsx
-  │   ├─ index.js
-  │   └─ styles.css
 ```
 
 ---
