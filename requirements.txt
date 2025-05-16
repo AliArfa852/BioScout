@@ -3,3 +3,10 @@ flask
 flask_cors
 numpy
 tensorflow
+pillow
+pandas
+langchain
+langchain-community
+keras
+bcrypt
+jwt
