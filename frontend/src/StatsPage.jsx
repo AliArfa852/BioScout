@@ -1,18 +1,38 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../App';
-import UserStatsHeader from '../components/stats/UserStatsHeader';
-import RewardsGallery from '../components/stats/RewardsGallery';
-import StatsGraph from '../components/stats/StatsGraph';
-import RankingsTable from '../components/stats/RankingsTable';
-import ContributionMap from '../components/stats/ContributionMap';
-import MobileStatsDrawer from '../components/stats/MobileStatsDrawer';
-import ChallengeTracker from '../components/stats/ChallengeTracker';
-import AchievementNotification from '../components/stats/AchievementNotification';
-import ProgressAnimation from '../components/stats/ProgressAnimation';
+import { useAuth } from './App';
+import UserStatsHeader from './components/stats/UserStatsHeader';
+import RewardsGallery from './components/stats/RewardsGallery';
+import StatsGraph from './components/stats/StatsGraph';
+import RankingsTable from './components/stats/RankingsTable';
+import ContributionMap from './components/stats/ContributionMap';
+import MobileStatsDrawer from './components/stats/MobileStatsDrawer';
+import ChallengeTracker from './components/stats/ChallengeTracker';
+import AchievementNotification from './components/stats/AchievementNotification';
+import ProgressAnimation from './components/stats/ProgressAnimation';
+
 
 // Configure API base URL for different environments
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+
+const [scrollPositions, setScrollPositions] = useState({});
+
+const handleTabChange = (tab) => {
+  // Save current scroll position
+  const currentPosition = window.scrollY;
+  setScrollPositions(prev => ({
+    ...prev,
+    [activeTab]: currentPosition
+  }));
+  
+  // Change active tab
+  setActiveTab(tab);
+  
+  // Restore scroll position for the selected tab (after render)
+  setTimeout(() => {
+    window.scrollTo(0, scrollPositions[tab] || 0);
+  }, 0);
+};
 
 const StatsPage = () => {
   const { user } = useAuth();

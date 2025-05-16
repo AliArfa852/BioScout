@@ -30,7 +30,7 @@ const AchievementNotification = ({ achievement, onClose }) => {
           <p className="achievement-description">{achievement.description}</p>
         </div>
       </div>
-      <button className="close-notification" onClick={onClose}>×</button>
+      <button className="close-notification" onClick={onClose}>x</button>
     </div>
   );
 };

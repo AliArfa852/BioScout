@@ -1622,3 +1622,17 @@ ol {
   color: var(--primary-color, #2E7D32);
   text-align: center;
 }
+
+.observation-image img {
+  max-width: 100%;
+  height: auto;
+}
+@media (max-width: 480px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .rewards-grid {
+    grid-template-columns: 1fr;
+  }
+}

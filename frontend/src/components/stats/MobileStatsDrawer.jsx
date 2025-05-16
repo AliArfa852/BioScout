@@ -100,3 +100,5 @@ const ProgressAnimation = ({ value, maxValue, size = 100, strokeWidth = 8, color
     </div>
   );
 };
+
+export default MobileStatsDrawer;
