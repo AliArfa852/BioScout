@@ -13,12 +13,37 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
 # Load observations CSV
+# def load_observations():
+#     path = os.path.join(DATA_FOLDER, "observations.csv")
+#     if os.path.exists(path):
+#         return pd.read_csv(path)
+#     return pd.DataFrame(columns=["observation_id", "species_name", "common_name", "date_observed",
+#                                  "location", "image_url", "notes", "observer"])
+
+
 def load_observations():
     path = os.path.join(DATA_FOLDER, "observations.csv")
     if os.path.exists(path):
-        return pd.read_csv(path)
-    return pd.DataFrame(columns=["observation_id", "species_name", "common_name", "date_observed",
-                                 "location", "image_url", "notes", "observer"])
+        try:
+            df = pd.read_csv(path)
+        except pd.errors.ParserError:
+            # Manually read and filter only rows with exactly 8 fields
+            with open(path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            header = lines[0].strip().split(',')
+            cleaned_rows = [line for line in lines[1:] if len(line.strip().split(',')) == len(header)]
+            # Reconstruct valid CSV string
+            cleaned_csv = '\n'.join([lines[0].strip()] + cleaned_rows)
+
+            from io import StringIO
+            df = pd.read_csv(StringIO(cleaned_csv))
+        return df
+    return pd.DataFrame(columns=[
+        "observation_id", "species_name", "common_name", "date_observed",
+        "location", "image_url", "notes", "observer"
+    ])
+
 
 # Save a new observation row to CSV
 def save_observation(row_dict):
