@@ -1,406 +1,317 @@
-import type { Express, Request } from "express";
-import { createServer, type Server } from "http";
-import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
-import { z } from "zod";
-import { 
-  insertDepartmentSchema, 
-  insertEmployeeSchema, 
-  insertTrainingModuleSchema, 
-  insertOnboardingTaskSchema,
-  insertEmployeeTaskSchema,
-  insertTrainingAssignmentSchema,
-  insertAuditLogSchema
-} from "@shared/schema";
+import { Express, Request, Response, NextFunction } from 'express';
+import { createServer, Server } from 'http';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { storage } from './storage';
+import { identifySpecies } from './imageProcessor';
+import { answerWithRAG } from './ragSystem';
+import { fileURLToPath } from 'url';
 
-// Helper function to extract request ID for audit logging
-function getRequestInfo(req: Request) {
-  return {
-    ipAddress: req.ip,
-    userAgent: req.headers["user-agent"] || "",
-  };
+// Get directory name for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Set up storage for multer (for image uploads)
+const uploadDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Function to log audit events
-async function logAudit(req: Request, action: string, resource: string, resourceId: string | null = null, details: any = {}, status: string = "success") {
-  if (!req.user) return;
-  
-  const userId = req.user.claims.sub;
-  const requestInfo = getRequestInfo(req);
-  
-  await storage.createAuditLog({
-    userId,
-    action,
-    resource,
-    resourceId: resourceId || undefined,
-    details,
-    status,
-    ipAddress: requestInfo.ipAddress,
-    userAgent: requestInfo.userAgent,
-  });
-}
+const imageStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
 
-// Auth middleware to check if user is an admin
-function isAdmin(req: any, res: any, next: any) {
-  if (!req.user) {
-    return res.status(401).json({ message: "Unauthorized" });
+const upload = multer({
+  storage: imageStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only images are allowed'));
+    }
+  }
+});
+
+// Authentication middleware
+function isAuthenticated(req: Request, res: Response, next: NextFunction) {
+  // For now, a simple check. This would be replaced with proper JWT auth
+  if (!req.headers.authorization) {
+    return res.status(401).json({ message: 'Unauthorized' });
   }
   
-  // Check if user has admin role
-  if (req.user.role !== "admin") {
-    return res.status(403).json({ message: "Forbidden: Admin access required" });
-  }
-  
+  // Here we'd typically validate the token and set user info in req.user
+  // For now we'll just pass through for simplicity
   next();
 }
 
-// Auth middleware to check if user is an admin or manager
-function isAdminOrManager(req: any, res: any, next: any) {
-  if (!req.user) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
+// Calculate points for an observation based on uniqueness
+async function calculatePoints(speciesName: string, location: any): Promise<number> {
+  // Base points for any observation
+  let points = 10;
   
-  // Check if user has admin or manager role
-  if (req.user.role !== "admin" && req.user.role !== "manager") {
-    return res.status(403).json({ message: "Forbidden: Admin or Manager access required" });
+  try {
+    // Check if this species has been observed before
+    const species = await storage.getSpecies(speciesName);
+    
+    if (!species) {
+      // New species discovery gets more points
+      points += 25;
+    } else {
+      // Check if this species has been observed in this area before
+      const nearbyObservations = await storage.getObservationsNearLocation(
+        location.coordinates[0],
+        location.coordinates[1],
+        1000 // 1km radius
+      );
+      
+      const sameSpeciesNearby = nearbyObservations.filter(obs => 
+        obs.speciesName.toLowerCase() === speciesName.toLowerCase()
+      );
+      
+      if (sameSpeciesNearby.length === 0) {
+        // First observation of this species in this area
+        points += 15;
+      }
+    }
+    
+    return points;
+  } catch (error) {
+    console.error('Error calculating points:', error);
+    return 10; // Default to base points on error
   }
-  
-  next();
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
-  await setupAuth(app);
-
-  // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
-      res.json(user);
-    } catch (error) {
-      console.error("Error fetching user:", error);
-      res.status(500).json({ message: "Failed to fetch user" });
-    }
+  // Public routes
+  app.get('/api/health', (req, res) => {
+    res.status(200).json({ status: 'ok' });
   });
-
-  // Department routes
-  app.get("/api/departments", isAuthenticated, async (req, res) => {
+  
+  // User routes
+  app.post('/api/users/register', async (req, res) => {
     try {
-      const departments = await storage.getAllDepartments();
-      res.json(departments);
-    } catch (error) {
-      console.error("Error fetching departments:", error);
-      res.status(500).json({ message: "Failed to fetch departments" });
-    }
-  });
-
-  app.post("/api/departments", isAuthenticated, isAdminOrManager, async (req, res) => {
-    try {
-      const validatedData = insertDepartmentSchema.parse(req.body);
-      const department = await storage.createDepartment(validatedData);
+      const { username, email, password } = req.body;
       
-      await logAudit(req, "Created", "Department", String(department.id), department);
-      
-      res.status(201).json(department);
-    } catch (error) {
-      console.error("Error creating department:", error);
-      res.status(400).json({ message: "Invalid department data" });
-    }
-  });
-
-  // Employee routes
-  app.get("/api/employees", isAuthenticated, async (req, res) => {
-    try {
-      const employees = await storage.getAllEmployees();
-      res.json(employees);
-    } catch (error) {
-      console.error("Error fetching employees:", error);
-      res.status(500).json({ message: "Failed to fetch employees" });
-    }
-  });
-
-  app.get("/api/employees/onboarding", isAuthenticated, async (req, res) => {
-    try {
-      const employees = await storage.getOnboardingEmployees();
-      res.json(employees);
-    } catch (error) {
-      console.error("Error fetching onboarding employees:", error);
-      res.status(500).json({ message: "Failed to fetch onboarding employees" });
-    }
-  });
-
-  app.get("/api/employees/:id", isAuthenticated, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      const employee = await storage.getEmployee(id);
-      
-      if (!employee) {
-        return res.status(404).json({ message: "Employee not found" });
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ message: 'User with this email already exists' });
       }
       
-      res.json(employee);
+      // Create new user
+      const newUser = await storage.createUser({ username, email, password });
+      
+      // Remove password from response
+      const { password: _, ...userWithoutPassword } = newUser;
+      
+      res.status(201).json(userWithoutPassword);
     } catch (error) {
-      console.error("Error fetching employee:", error);
-      res.status(500).json({ message: "Failed to fetch employee" });
+      console.error('Error registering user:', error);
+      res.status(500).json({ message: 'Error registering user' });
     }
   });
-
-  app.post("/api/employees", isAuthenticated, isAdminOrManager, async (req, res) => {
+  
+  // These routes require authentication
+  app.use('/api/observations', isAuthenticated);
+  app.use('/api/species', isAuthenticated);
+  app.use('/api/rag', isAuthenticated);
+  
+  // Observation routes
+  app.get('/api/observations', async (req, res) => {
     try {
-      const validatedData = insertEmployeeSchema.parse(req.body);
-      const employee = await storage.createEmployee(validatedData);
-      
-      await logAudit(req, "Created", "Employee", String(employee.id), employee);
-      
-      res.status(201).json(employee);
+      const observations = await storage.getAllObservations();
+      res.status(200).json(observations);
     } catch (error) {
-      console.error("Error creating employee:", error);
-      res.status(400).json({ message: "Invalid employee data" });
+      console.error('Error getting observations:', error);
+      res.status(500).json({ message: 'Error getting observations' });
     }
   });
-
-  // Training module routes
-  app.get("/api/training-modules", isAuthenticated, async (req, res) => {
+  
+  app.get('/api/observations/:id', async (req, res) => {
     try {
-      const modules = await storage.getAllTrainingModules();
-      res.json(modules);
-    } catch (error) {
-      console.error("Error fetching training modules:", error);
-      res.status(500).json({ message: "Failed to fetch training modules" });
-    }
-  });
-
-  app.get("/api/training-modules/:id", isAuthenticated, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      const module = await storage.getTrainingModule(id);
+      const observation = await storage.getObservation(req.params.id);
       
-      if (!module) {
-        return res.status(404).json({ message: "Training module not found" });
+      if (!observation) {
+        return res.status(404).json({ message: 'Observation not found' });
       }
       
-      res.json(module);
+      res.status(200).json(observation);
     } catch (error) {
-      console.error("Error fetching training module:", error);
-      res.status(500).json({ message: "Failed to fetch training module" });
+      console.error('Error getting observation:', error);
+      res.status(500).json({ message: 'Error getting observation' });
     }
   });
-
-  app.post("/api/training-modules", isAuthenticated, isAdminOrManager, async (req, res) => {
+  
+  app.post('/api/observations', upload.single('image'), async (req, res) => {
     try {
-      const validatedData = insertTrainingModuleSchema.parse({
-        ...req.body,
-        createdBy: req.user.claims.sub
-      });
-      
-      const module = await storage.createTrainingModule(validatedData);
-      
-      await logAudit(req, "Created", "TrainingModule", String(module.id), module);
-      
-      res.status(201).json(module);
-    } catch (error) {
-      console.error("Error creating training module:", error);
-      res.status(400).json({ message: "Invalid training module data" });
-    }
-  });
-
-  // Training assignment routes
-  app.get("/api/training-assignments", isAuthenticated, async (req, res) => {
-    try {
-      const assignments = await storage.getAllTrainingAssignments();
-      res.json(assignments);
-    } catch (error) {
-      console.error("Error fetching training assignments:", error);
-      res.status(500).json({ message: "Failed to fetch training assignments" });
-    }
-  });
-
-  app.get("/api/training-assignments/employee/:employeeId", isAuthenticated, async (req, res) => {
-    try {
-      const employeeId = parseInt(req.params.employeeId);
-      const assignments = await storage.getTrainingAssignmentsByEmployee(employeeId);
-      res.json(assignments);
-    } catch (error) {
-      console.error("Error fetching employee training assignments:", error);
-      res.status(500).json({ message: "Failed to fetch employee training assignments" });
-    }
-  });
-
-  app.get("/api/training-assignments/module/:moduleId", isAuthenticated, async (req, res) => {
-    try {
-      const moduleId = parseInt(req.params.moduleId);
-      const assignments = await storage.getTrainingAssignmentsByModule(moduleId);
-      res.json(assignments);
-    } catch (error) {
-      console.error("Error fetching module training assignments:", error);
-      res.status(500).json({ message: "Failed to fetch module training assignments" });
-    }
-  });
-
-  app.post("/api/training-assignments", isAuthenticated, isAdminOrManager, async (req, res) => {
-    try {
-      const validatedData = insertTrainingAssignmentSchema.parse({
-        ...req.body,
-        assignedBy: req.user.claims.sub
-      });
-      
-      const assignment = await storage.createTrainingAssignment(validatedData);
-      
-      await logAudit(req, "Created", "TrainingAssignment", String(assignment.id), assignment);
-      
-      res.status(201).json(assignment);
-    } catch (error) {
-      console.error("Error creating training assignment:", error);
-      res.status(400).json({ message: "Invalid training assignment data" });
-    }
-  });
-
-  app.patch("/api/training-assignments/:id/progress", isAuthenticated, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      const { progress } = z.object({ progress: z.number().min(0).max(100) }).parse(req.body);
-      
-      const assignment = await storage.updateTrainingProgress(id, progress);
-      
-      if (progress === 100) {
-        await storage.completeTrainingAssignment(id);
+      if (!req.file) {
+        return res.status(400).json({ message: 'No image uploaded' });
       }
       
-      await logAudit(req, "Updated", "TrainingAssignment", String(id), { progress });
+      const { speciesName, commonNames, description, latitude, longitude } = req.body;
+      const userId = req.headers.authorization; // In a real app, this would come from the JWT token
       
-      res.json(assignment);
-    } catch (error) {
-      console.error("Error updating training progress:", error);
-      res.status(400).json({ message: "Invalid progress data" });
-    }
-  });
-
-  // Onboarding task routes
-  app.get("/api/onboarding-tasks", isAuthenticated, async (req, res) => {
-    try {
-      const tasks = await storage.getAllOnboardingTasks();
-      res.json(tasks);
-    } catch (error) {
-      console.error("Error fetching onboarding tasks:", error);
-      res.status(500).json({ message: "Failed to fetch onboarding tasks" });
-    }
-  });
-
-  app.post("/api/onboarding-tasks", isAuthenticated, isAdminOrManager, async (req, res) => {
-    try {
-      const validatedData = insertOnboardingTaskSchema.parse({
-        ...req.body,
-        createdBy: req.user.claims.sub
+      // Process the image to identify the species if not provided
+      let identifiedSpecies = speciesName;
+      let confidence = 0.7; // Default confidence
+      
+      if (!speciesName) {
+        const result = await identifySpecies(req.file.path);
+        identifiedSpecies = result.species;
+        confidence = result.confidence;
+      }
+      
+      // Create location object for MongoDB
+      const location = {
+        type: 'Point',
+        coordinates: [parseFloat(longitude), parseFloat(latitude)]
+      };
+      
+      // Calculate points based on uniqueness
+      const points = await calculatePoints(identifiedSpecies, location);
+      
+      // Create the observation
+      const newObservation = await storage.createObservation({
+        userId,
+        speciesName: identifiedSpecies,
+        commonNames: commonNames ? JSON.parse(commonNames) : [],
+        location,
+        imageUrl: `/uploads/${req.file.filename}`,
+        description: description || '',
+        identificationConfidence: confidence,
+        pointsAwarded: points
       });
       
-      const task = await storage.createOnboardingTask(validatedData);
+      // Add points to user
+      await storage.updateUserPoints(userId, points);
       
-      await logAudit(req, "Created", "OnboardingTask", String(task.id), task);
+      // Check if we need to create a new species entry
+      const existingSpecies = await storage.getSpecies(identifiedSpecies);
+      if (!existingSpecies) {
+        // Create a basic species entry that can be enriched later
+        await storage.createSpecies({
+          scientificName: identifiedSpecies,
+          commonNames: commonNames ? JSON.parse(commonNames) : [],
+          type: 'other', // We can't determine this automatically
+          description: description || `Observed in Islamabad area`,
+          habitat: 'Islamabad region',
+          imageUrls: [`/uploads/${req.file.filename}`]
+        });
+      }
       
-      res.status(201).json(task);
+      res.status(201).json({ 
+        ...newObservation, 
+        message: `Observation recorded successfully! You earned ${points} points.` 
+      });
     } catch (error) {
-      console.error("Error creating onboarding task:", error);
-      res.status(400).json({ message: "Invalid onboarding task data" });
+      console.error('Error creating observation:', error);
+      res.status(500).json({ message: 'Error creating observation' });
     }
   });
-
-  // Employee task routes
-  app.get("/api/employee-tasks", isAuthenticated, async (req, res) => {
+  
+  // Get observations near a location
+  app.get('/api/observations/near/:longitude/:latitude/:distance?', async (req, res) => {
     try {
-      const tasks = await storage.getAllEmployeeTasks();
-      res.json(tasks);
+      const longitude = parseFloat(req.params.longitude);
+      const latitude = parseFloat(req.params.latitude);
+      const distance = req.params.distance ? parseInt(req.params.distance) : 1000; // Default 1km
+      
+      if (isNaN(longitude) || isNaN(latitude)) {
+        return res.status(400).json({ message: 'Invalid coordinates' });
+      }
+      
+      const observations = await storage.getObservationsNearLocation(longitude, latitude, distance);
+      res.status(200).json(observations);
     } catch (error) {
-      console.error("Error fetching employee tasks:", error);
-      res.status(500).json({ message: "Failed to fetch employee tasks" });
+      console.error('Error getting nearby observations:', error);
+      res.status(500).json({ message: 'Error getting nearby observations' });
     }
   });
-
-  app.get("/api/employee-tasks/upcoming", isAuthenticated, async (req, res) => {
+  
+  // Species routes
+  app.get('/api/species', async (req, res) => {
     try {
-      const tasks = await storage.getUpcomingTasks();
-      res.json(tasks);
+      const species = await storage.getAllSpecies();
+      res.status(200).json(species);
     } catch (error) {
-      console.error("Error fetching upcoming tasks:", error);
-      res.status(500).json({ message: "Failed to fetch upcoming tasks" });
+      console.error('Error getting species:', error);
+      res.status(500).json({ message: 'Error getting species' });
     }
   });
-
-  app.get("/api/employee-tasks/employee/:employeeId", isAuthenticated, async (req, res) => {
+  
+  app.get('/api/species/:name', async (req, res) => {
     try {
-      const employeeId = parseInt(req.params.employeeId);
-      const tasks = await storage.getEmployeeTasksByEmployee(employeeId);
-      res.json(tasks);
+      // Try to find by scientific name first
+      let species = await storage.getSpecies(req.params.name);
+      
+      // If not found, try common name
+      if (!species) {
+        species = await storage.getSpeciesByCommonName(req.params.name);
+      }
+      
+      if (!species) {
+        return res.status(404).json({ message: 'Species not found' });
+      }
+      
+      res.status(200).json(species);
     } catch (error) {
-      console.error("Error fetching employee tasks:", error);
-      res.status(500).json({ message: "Failed to fetch employee tasks" });
+      console.error('Error getting species:', error);
+      res.status(500).json({ message: 'Error getting species' });
     }
   });
-
-  app.post("/api/employee-tasks", isAuthenticated, isAdminOrManager, async (req, res) => {
+  
+  // RAG system routes
+  app.post('/api/rag/ask', async (req, res) => {
     try {
-      const validatedData = insertEmployeeTaskSchema.parse({
-        ...req.body,
-        assignedBy: req.user.claims.sub
+      const { question } = req.body;
+      const userId = req.headers.authorization; // In a real app, would come from JWT
+      
+      if (!question) {
+        return res.status(400).json({ message: 'Question is required' });
+      }
+      
+      // Use RAG system to answer the question
+      const answer = await answerWithRAG(question);
+      
+      // Log the query
+      await storage.createQuery({
+        userId,
+        question,
+        answer: answer.text,
+        relatedObservationIds: answer.relatedObservationIds || [],
+        relatedSpeciesIds: answer.relatedSpeciesIds || [],
+        sourcesUsed: answer.sources || []
       });
       
-      const task = await storage.createEmployeeTask(validatedData);
-      
-      await logAudit(req, "Created", "EmployeeTask", String(task.id), task);
-      
-      res.status(201).json(task);
+      res.status(200).json({
+        question,
+        answer: answer.text,
+        sources: answer.sources
+      });
     } catch (error) {
-      console.error("Error creating employee task:", error);
-      res.status(400).json({ message: "Invalid employee task data" });
+      console.error('Error processing RAG query:', error);
+      res.status(500).json({ message: 'Error processing your question' });
     }
   });
-
-  app.patch("/api/employee-tasks/:id/complete", isAuthenticated, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      const task = await storage.completeEmployeeTask(id);
-      
-      await logAudit(req, "Completed", "EmployeeTask", String(id), task);
-      
-      res.json(task);
-    } catch (error) {
-      console.error("Error completing employee task:", error);
-      res.status(400).json({ message: "Failed to complete employee task" });
+  
+  // Static files (for uploaded images)
+  app.use('/uploads', (req, res, next) => {
+    const filePath = path.join(uploadDir, req.path);
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      res.sendFile(filePath);
+    } else {
+      next();
     }
   });
-
-  // Audit log routes
-  app.get("/api/audit-logs", isAuthenticated, isAdminOrManager, async (req, res) => {
-    try {
-      const logs = await storage.getAuditLogs();
-      res.json(logs);
-    } catch (error) {
-      console.error("Error fetching audit logs:", error);
-      res.status(500).json({ message: "Failed to fetch audit logs" });
-    }
-  });
-
-  app.get("/api/audit-logs/recent", isAuthenticated, isAdminOrManager, async (req, res) => {
-    try {
-      const logs = await storage.getRecentAuditLogs();
-      res.json(logs);
-    } catch (error) {
-      console.error("Error fetching recent audit logs:", error);
-      res.status(500).json({ message: "Failed to fetch recent audit logs" });
-    }
-  });
-
-  // Dashboard stats
-  app.get("/api/dashboard/stats", isAuthenticated, async (req, res) => {
-    try {
-      const stats = await storage.getDashboardStats();
-      res.json(stats);
-    } catch (error) {
-      console.error("Error fetching dashboard stats:", error);
-      res.status(500).json({ message: "Failed to fetch dashboard stats" });
-    }
-  });
-
+  
   const httpServer = createServer(app);
   return httpServer;
 }

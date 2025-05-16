@@ -1,47 +1,63 @@
-import { Switch, Route } from "wouter";
-import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/not-found";
-import Dashboard from "@/pages/Dashboard";
-import Employees from "@/pages/Employees";
-import OnboardingTasks from "@/pages/OnboardingTasks";
-import TrainingModules from "@/pages/TrainingModules";
-import Reports from "@/pages/Reports";
-import AuditLogs from "@/pages/AuditLogs";
-import Settings from "@/pages/Settings";
-import Login from "@/pages/Login";
-import MainLayout from "@/layouts/MainLayout";
-import { useAuth } from "@/hooks/useAuth";
+import React from 'react';
+import { Route, Switch, Link, useLocation } from 'wouter';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '@/lib/queryClient';
+import { Toaster } from '@/components/ui/toaster';
+import { useAuth } from '@/hooks/useAuth';
+import MainLayout from '@/layouts/MainLayout';
 
+// Pages
+import HomePage from '@/pages/Home';
+import MapPage from '@/pages/Map';
+import ObservationsPage from '@/pages/Observations';
+import SpeciesPage from '@/pages/Species';
+import IdentifyPage from '@/pages/Identify';
+import AskPage from '@/pages/Ask';
+import ProfilePage from '@/pages/Profile';
+import LoginPage from '@/pages/Login';
+import RegisterPage from '@/pages/Register';
+import NotFoundPage from '@/pages/not-found';
+
+// Protected route component
 function ProtectedRoute({ component: Component, ...rest }: any) {
   const { isAuthenticated, isLoading } = useAuth();
+  const [, navigate] = useLocation();
+
+  React.useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      navigate('/login');
+    }
+  }, [isAuthenticated, isLoading, navigate]);
 
   if (isLoading) {
-    return <div className="flex h-screen items-center justify-center">Loading...</div>;
+    return <div className="flex items-center justify-center h-screen">Loading...</div>;
   }
 
-  if (!isAuthenticated) {
-    window.location.href = "/api/login";
-    return null;
-  }
-
-  return <Component {...rest} />;
+  return isAuthenticated ? <Component {...rest} /> : null;
 }
 
+// Router component
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={() => <ProtectedRoute component={Dashboard} />} />
-      <Route path="/employees" component={() => <ProtectedRoute component={Employees} />} />
-      <Route path="/onboarding-tasks" component={() => <ProtectedRoute component={OnboardingTasks} />} />
-      <Route path="/training-modules" component={() => <ProtectedRoute component={TrainingModules} />} />
-      <Route path="/reports" component={() => <ProtectedRoute component={Reports} />} />
-      <Route path="/audit-logs" component={() => <ProtectedRoute component={AuditLogs} />} />
-      <Route path="/settings" component={() => <ProtectedRoute component={Settings} />} />
-      <Route path="/login" component={Login} />
-      <Route component={NotFound} />
+      <Route path="/" component={HomePage} />
+      <Route path="/map" component={MapPage} />
+      <Route path="/species" component={SpeciesPage} />
+      <Route path="/observations">
+        <ProtectedRoute component={ObservationsPage} />
+      </Route>
+      <Route path="/identify">
+        <ProtectedRoute component={IdentifyPage} />
+      </Route>
+      <Route path="/ask">
+        <ProtectedRoute component={AskPage} />
+      </Route>
+      <Route path="/profile">
+        <ProtectedRoute component={ProfilePage} />
+      </Route>
+      <Route path="/login" component={LoginPage} />
+      <Route path="/register" component={RegisterPage} />
+      <Route component={NotFoundPage} />
     </Switch>
   );
 }
@@ -49,12 +65,10 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <MainLayout>
-          <Router />
-        </MainLayout>
-      </TooltipProvider>
+      <MainLayout>
+        <Router />
+      </MainLayout>
+      <Toaster />
     </QueryClientProvider>
   );
 }
