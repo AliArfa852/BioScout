@@ -1,296 +1,413 @@
-from typing import List, Dict, Any, Optional, Tuple
 import os
 import numpy as np
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+import pandas as pd
+from langchain.vectorstores import MongoDBAtlasVectorSearch
+from langchain.document_loaders import TextLoader, CSVLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.embeddings import TensorflowEmbeddings
-import tensorflow as tf
-import tensorflow_hub as hub
+from langchain.embeddings import TensorflowHubEmbeddings
+from langchain.schema import Document
+from langchain.chains import RetrievalQA
+from langchain.llms import OpenAI
+from langchain.prompts import PromptTemplate
 
 class RAGSystem:
     """
-    Retrieval-Augmented Generation system for the BioScout Islamabad application.
-    This system will use a combination of local knowledge base and tensorflow embeddings
-    to provide accurate information about species in Islamabad.
+    Retrieval-Augmented Generation system for biodiversity information
     """
-    def __init__(self, db, model_path=None):
+    def __init__(self, db):
+        """Initialize with database connection"""
         self.db = db
-        self.collections = {
-            'species': db['species'],
-            'observations': db['observations'],
-            'knowledge_sources': db['knowledge_sources'],
-            'chat_history': db['chat_history']
-        }
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            separators=["\n\n", "\n", ".", " ", ""]
-        )
+        self.embedding_model_url = "https://tfhub.dev/google/universal-sentence-encoder/4"
+        self.embeddings = TensorflowHubEmbeddings(model_url=self.embedding_model_url)
+        self.vector_store = None
+        self.initialize_vector_store()
         
-        # Initialize embedding model
-        try:
-            # Load model path from environment or use default
-            self.model_path = model_path or os.environ.get('EMBEDDING_MODEL_PATH', 
-                                                        "https://tfhub.dev/google/universal-sentence-encoder/4")
-            
-            # Load the TensorFlow model
-            self.embedding_model = hub.load(self.model_path)
-            print(f"Successfully loaded embedding model from {self.model_path}")
-            
-            # Initialize vector store if we have documents
-            self.vector_store = None
-            self.initialize_vector_store()
-            
-        except Exception as e:
-            print(f"Error initializing embedding model: {e}")
-            self.embedding_model = None
-    
-    def embed_texts(self, texts: List[str]) -> np.ndarray:
-        """
-        Generate embeddings for a list of texts using the TensorFlow model
-        """
-        if not self.embedding_model:
-            raise ValueError("Embedding model not initialized")
+        # Data paths
+        self.data_dir = "data/rag_data"
+        os.makedirs(self.data_dir, exist_ok=True)
         
-        embeddings = self.embedding_model(texts)
-        return embeddings.numpy()
-    
     def initialize_vector_store(self):
-        """
-        Initialize the vector store with documents from the database
-        """
-        # Get all documents from the database
-        species_data = list(self.collections['species'].find({}))
-        knowledge_sources = list(self.collections['knowledge_sources'].find({}))
-        
-        # Create documents from species data
-        documents = []
-        for species in species_data:
-            # Create a document for each species
-            species_text = f"Scientific Name: {species.get('scientific_name')}\n" \
-                          f"Common Names: {', '.join(species.get('common_names', []))}\n" \
-                          f"Type: {species.get('type')}\n" \
-                          f"Description: {species.get('description')}\n" \
-                          f"Habitat: {species.get('habitat')}\n"
-            
-            if species.get('conservation_status'):
-                species_text += f"Conservation Status: {species.get('conservation_status')}\n"
-            
-            if species.get('dietary_habits'):
-                species_text += f"Dietary Habits: {species.get('dietary_habits')}\n"
-            
-            metadata = {
-                "source_type": "species",
-                "id": str(species.get('_id')),
-                "scientific_name": species.get('scientific_name'),
-                "common_names": species.get('common_names', [])
-            }
-            
-            documents.append({"text": species_text, "metadata": metadata})
-        
-        # Add knowledge source documents
-        for source in knowledge_sources:
-            source_text = f"Title: {source.get('title')}\n" \
-                         f"Content: {source.get('content')}\n"
-            
-            if source.get('source'):
-                source_text += f"Source: {source.get('source')}\n"
-            
-            metadata = {
-                "source_type": "knowledge",
-                "id": str(source.get('_id')),
-                "title": source.get('title'),
-                "species_references": source.get('species_references', [])
-            }
-            
-            documents.append({"text": source_text, "metadata": metadata})
-        
-        if not documents:
-            print("No documents found in the database for vector store initialization")
-            return
-        
-        # Split documents into chunks for better retrieval
-        all_texts = []
-        all_metadatas = []
-        
-        for doc in documents:
-            chunks = self.text_splitter.split_text(doc["text"])
-            all_texts.extend(chunks)
-            all_metadatas.extend([doc["metadata"]] * len(chunks))
-        
-        # Generate embeddings and create vector store
-        embeddings = self.embed_texts(all_texts)
-        
-        # Create FAISS index
-        self.vector_store = FAISS(embedding_function=self.embed_texts, 
-                                  texts=all_texts, 
-                                  metadatas=all_metadatas)
-        print(f"Vector store initialized with {len(all_texts)} document chunks")
-    
-    def search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
-        """
-        Search for relevant documents given a query
-        """
-        if not self.vector_store:
-            raise ValueError("Vector store not initialized")
-        
-        # Generate query embedding
-        query_embedding = self.embed_texts([query])[0]
-        
-        # Search vector store
-        results = self.vector_store.similarity_search_by_vector(
-            query_embedding, k=k
+        """Initialize the vector store with MongoDB Atlas"""
+        self.vector_store = MongoDBAtlasVectorSearch(
+            collection=self.db.rag_documents,
+            embedding=self.embeddings,
+            index_name="vector_index",
+            text_key="content",
+            embedding_key="embedding"
         )
-        
-        return results
     
-    def ask(self, question: str, user_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Answer a question using RAG
-        Return format: {"answer": str, "sources": List[str]}
-        """
-        # Search for relevant documents
+    def process_csv_data(self, csv_path: str) -> List[Document]:
+        """Process CSV data into documents for indexing"""
         try:
-            results = self.search(question, k=5)
+            # Load the CSV file
+            df = pd.read_csv(csv_path)
             
-            # Construct context from retrieved documents
-            context = "\n\n".join([r.page_content for r in results])
+            # Create documents from the rows
+            documents = []
             
-            # Get source information
-            sources = []
-            related_species_ids = []
-            related_observation_ids = []
-            
-            for result in results:
-                metadata = result.metadata
-                source_type = metadata.get("source_type")
+            for _, row in df.iterrows():
+                # Create content from the row data
+                content = f"""
+                Species: {row.get('species_name', '')}
+                Common Name: {row.get('common_name', '')}
+                Date Observed: {row.get('date_observed', '')}
+                Location: {row.get('location', '')}
+                Notes: {row.get('notes', '')}
+                Observer: {row.get('observer', '')}
+                """
                 
-                if source_type == "species":
-                    source_info = f"Species: {metadata.get('scientific_name')}"
-                    related_species_ids.append(metadata.get('id'))
-                elif source_type == "knowledge":
-                    source_info = f"Knowledge Source: {metadata.get('title')}"
-                    if 'species_references' in metadata:
-                        related_species_ids.extend(metadata.get('species_references'))
-                else:
-                    source_info = f"Source: {metadata.get('id')}"
+                # Create metadata
+                metadata = {
+                    "source": csv_path,
+                    "observation_id": row.get('observation_id', ''),
+                    "species_name": row.get('species_name', ''),
+                    "date_observed": row.get('date_observed', ''),
+                    "location": row.get('location', '')
+                }
                 
-                if source_info not in sources:
-                    sources.append(source_info)
+                # Create document
+                doc = Document(
+                    page_content=content,
+                    metadata=metadata
+                )
+                
+                documents.append(doc)
             
-            # Here we would typically call an LLM to generate the answer
-            # Since we're not using external APIs, we'll construct a simple answer
-            # from the retrieved documents
-            
-            # In a real implementation, you'd use a local LLM or LangChain
-            answer = self._generate_simple_answer(question, context)
-            
-            # Store the question and answer in chat history
-            self._save_chat_history(question, answer, user_id, related_species_ids, 
-                                   related_observation_ids, sources)
-            
-            return {
-                "answer": answer,
-                "sources": sources
-            }
+            return documents
         
         except Exception as e:
-            print(f"Error in RAG system: {e}")
+            print(f"Error processing CSV data: {str(e)}")
+            return []
+    
+    def update_embeddings(self):
+        """Update embeddings for all documents in the rag_documents collection"""
+        try:
+            # Get all documents without embeddings
+            docs_without_embeddings = list(self.db.rag_documents.find({"embedding": None}))
+            
+            if not docs_without_embeddings:
+                print("No documents requiring embedding updates found.")
+                return
+            
+            print(f"Updating embeddings for {len(docs_without_embeddings)} documents...")
+            
+            for doc in docs_without_embeddings:
+                # Generate embedding
+                content = doc.get("content", "")
+                if not content:
+                    continue
+                
+                embedding = self.embeddings.embed_query(content)
+                
+                # Update the document with the embedding
+                self.db.rag_documents.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"embedding": embedding}}
+                )
+            
+            print("Embedding update completed.")
+            
+        except Exception as e:
+            print(f"Error updating embeddings: {str(e)}")
+    
+    def answer_question(self, question: str) -> Dict[str, Any]:
+        """
+        Answer a question about biodiversity using RAG
+        
+        Args:
+            question: The question to answer
+            
+        Returns:
+            Dict containing the answer and related information
+        """
+        try:
+            # Make sure all documents have embeddings
+            self.update_embeddings()
+            
+            # Create a QA chain with the vector store
+            retriever = self.vector_store.as_retriever(
+                search_kwargs={"k": 5}  # Retrieve top 5 most relevant documents
+            )
+            
+            # Create custom prompt template for biodiversity Q&A
+            prompt_template = """
+            You are an expert on biodiversity in Islamabad, Pakistan. Use the following pieces of context from the 
+            biodiversity database to answer the question. If you don't know the answer, just say 
+            "I don't have enough information to answer this question" - don't make up an answer.
+            
+            Context:
+            {context}
+            
+            Question: {question}
+            
+            Answer:
+            """
+            
+            PROMPT = PromptTemplate(
+                template=prompt_template,
+                input_variables=["context", "question"]
+            )
+            
+            # For local processing without OpenAI, can use a different LLM implementation here
+            # or even a simple retrieval + templating approach
+            
+            # Get relevant documents from the vector store
+            docs = retriever.get_relevant_documents(question)
+            
+            # Extract the relevant information
+            context_text = "\n\n".join([doc.page_content for doc in docs])
+            
+            # Generate suggested questions
+            suggested_questions = self._generate_follow_up_questions(question, docs)
+            
+            # Get related species IDs from the retrieved documents
+            related_species_ids = []
+            sources_used = []
+            
+            for doc in docs:
+                # Extract species name from metadata
+                species_name = doc.metadata.get("species_name")
+                if species_name and species_name not in [s.get("name") for s in related_species_ids]:
+                    # Get species info
+                    species_info = self.db.species.find_one({"scientific_name": species_name})
+                    if species_info:
+                        related_species_ids.append({
+                            "id": str(species_info.get("_id")),
+                            "name": species_name,
+                            "type": species_info.get("type", "unknown")
+                        })
+                
+                # Add source
+                source = doc.metadata.get("source", "biodiversity database")
+                if source and source not in sources_used:
+                    sources_used.append(source)
+            
+            # Simple templated answer for now - in a production system, use a real LLM
+            answer = self._generate_templated_answer(question, context_text)
+            
+            # Track this question in the queries collection
+            self.db.queries.insert_one({
+                "question": question,
+                "answer": answer,
+                "sources_used": sources_used,
+                "related_species_ids": [rs["id"] for rs in related_species_ids],
+                "timestamp": datetime.now()
+            })
+            
             return {
-                "answer": f"I'm sorry, I couldn't process your question due to a technical issue. Please try again later.",
-                "sources": []
+                "text": answer,
+                "sources": sources_used,
+                "related_species_ids": related_species_ids,
+                "suggested_questions": suggested_questions
+            }
+            
+        except Exception as e:
+            print(f"Error answering question: {str(e)}")
+            return {
+                "text": "I'm sorry, I encountered an error while trying to answer your question.",
+                "sources": [],
+                "related_species_ids": [],
+                "suggested_questions": [
+                    "What birds are commonly found in Islamabad?",
+                    "What are the endangered species in Pakistan?",
+                    "How does seasonal change affect biodiversity in Islamabad?"
+                ]
             }
     
-    def _generate_simple_answer(self, question: str, context: str) -> str:
+    def _generate_templated_answer(self, question: str, context: str) -> str:
         """
-        Generate a simple answer from the context
-        This is a fallback method when no LLM is available
+        Generate a templated answer for demonstration purposes.
+        In a production system, this would use a language model.
         """
-        # Extract relevant sentences that might contain the answer
-        sentences = context.split('.')
+        if not context:
+            return "I don't have enough information in my database to answer this question about Islamabad's biodiversity."
         
-        # Score sentences by relevance to the question
-        question_words = set(question.lower().split())
-        scored_sentences = []
+        # Basic keyword matching for demonstration purposes
+        question_lower = question.lower()
         
-        for sentence in sentences:
-            if not sentence.strip():
-                continue
-                
-            # Simple bag-of-words relevance score
-            words = set(sentence.lower().split())
-            overlap = question_words.intersection(words)
-            score = len(overlap) / len(question_words) if question_words else 0
-            
-            scored_sentences.append((sentence, score))
+        if "bird" in question_lower or "birds" in question_lower:
+            return f"Based on observations in our database, Islamabad has a diverse bird population. {context}"
         
-        # Sort by relevance score
-        scored_sentences.sort(key=lambda x: x[1], reverse=True)
+        if "endangered" in question_lower:
+            return f"Regarding endangered species in Islamabad: {context}"
         
-        # Take top 3 most relevant sentences
-        top_sentences = [s for s, _ in scored_sentences[:3]]
+        if "reptile" in question_lower or "reptiles" in question_lower:
+            return f"About reptiles in the Islamabad region: {context}"
         
-        # Join sentences to form the answer
-        answer = '. '.join(top_sentences)
+        if "plant" in question_lower or "plants" in question_lower or "tree" in question_lower or "trees" in question_lower:
+            return f"Regarding the plant life in Islamabad: {context}"
         
-        if answer:
-            return answer + '.'
-        else:
-            return "I don't have specific information about that in my knowledge base yet."
+        if "location" in question_lower or "where" in question_lower or "habitat" in question_lower:
+            return f"About biodiversity locations in Islamabad: {context}"
+        
+        # General response
+        return f"Here's information about biodiversity in Islamabad based on our observations: {context}"
     
-    def _save_chat_history(self, question: str, answer: str, user_id: Optional[str],
-                          related_species_ids: List[str], related_observation_ids: List[str],
-                          sources_used: List[str]):
+    def _generate_follow_up_questions(self, question: str, docs: List[Document]) -> List[str]:
         """
-        Save the question and answer to chat history in MongoDB
+        Generate follow-up questions based on the current question and retrieved documents.
         """
-        chat_record = {
-            "question": question,
-            "answer": answer,
-            "created_at": datetime.now(),
-            "related_species_ids": related_species_ids,
-            "related_observation_ids": related_observation_ids,
-            "sources_used": sources_used
-        }
+        suggested_questions = []
         
-        if user_id:
-            chat_record["user_id"] = user_id
+        # Extract species mentioned in the retrieved documents
+        species_mentioned = []
+        locations_mentioned = []
+        
+        for doc in docs:
+            species_name = doc.metadata.get("species_name")
+            if species_name and species_name not in species_mentioned:
+                species_mentioned.append(species_name)
             
-        self.collections['chat_history'].insert_one(chat_record)
+            location = doc.metadata.get("location")
+            if location and location not in locations_mentioned:
+                locations_mentioned.append(location)
         
-    def train(self, documents: List[Dict[str, Any]]):
+        # Generate species-specific questions
+        for species in species_mentioned[:2]:  # Limit to first 2 to avoid too many questions
+            suggested_questions.append(f"What is the habitat of {species}?")
+            suggested_questions.append(f"When is {species} commonly observed in Islamabad?")
+        
+        # Generate location-specific questions
+        for location in locations_mentioned[:2]:
+            suggested_questions.append(f"What other species can be found in {location}?")
+        
+        # Add some general questions
+        general_questions = [
+            "What are the most endangered species in Islamabad?",
+            "How has urbanization affected biodiversity in Islamabad?",
+            "What conservation efforts are underway in Islamabad?",
+            "What are the seasonal patterns of wildlife in Islamabad?",
+            "Which areas in Islamabad have the highest biodiversity?"
+        ]
+        
+        # Select a few general questions
+        import random
+        selected_general = random.sample(general_questions, min(2, len(general_questions)))
+        suggested_questions.extend(selected_general)
+        
+        # Limit to 5 questions
+        return suggested_questions[:5]
+    
+    def create_csv_from_observations(self) -> str:
         """
-        Train the RAG system with new documents
-        Each document should have a "text" field and a "metadata" field
+        Creates a CSV file from the observations in the database for RAG processing
+        
+        Returns:
+            Path to the created CSV file
         """
-        if not documents:
-            return
+        try:
+            # Get all observations
+            observations = list(self.db.observations.find())
             
-        # Split documents into chunks
-        all_texts = []
-        all_metadatas = []
+            if not observations:
+                print("No observations found in the database.")
+                return ""
+            
+            # Create a dataframe
+            data = []
+            
+            for obs in observations:
+                # Format common names as comma-separated string
+                common_names_str = ", ".join(obs.get("common_names", []))
+                
+                # Format date
+                date_str = obs.get("date_observed").strftime("%m/%d/%Y") if obs.get("date_observed") else ""
+                
+                data.append({
+                    "observation_id": obs.get("observation_id", ""),
+                    "species_name": obs.get("species_name", ""),
+                    "common_name": common_names_str,
+                    "date_observed": date_str,
+                    "location": obs.get("location", ""),
+                    "image_url": obs.get("image_url", ""),
+                    "notes": obs.get("notes", ""),
+                    "observer": obs.get("observer", "")
+                })
+            
+            # Create dataframe and export to CSV
+            df = pd.DataFrame(data)
+            
+            # Create filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_path = os.path.join(self.data_dir, f"observations_{timestamp}.csv")
+            
+            # Save to CSV
+            df.to_csv(file_path, index=False)
+            
+            print(f"Created CSV file with {len(data)} observations at {file_path}")
+            return file_path
+            
+        except Exception as e:
+            print(f"Error creating CSV from observations: {str(e)}")
+            return ""
+    
+    def update_rag_from_csv(self, csv_path: Optional[str] = None) -> bool:
+        """
+        Update the RAG system with data from a CSV file
         
-        for doc in documents:
-            chunks = self.text_splitter.split_text(doc["text"])
-            all_texts.extend(chunks)
-            all_metadatas.extend([doc["metadata"]] * len(chunks))
-        
-        # Generate embeddings and create/update vector store
-        embeddings = self.embed_texts(all_texts)
-        
-        if self.vector_store:
-            # Update existing vector store
-            for i, (text, metadata) in enumerate(zip(all_texts, all_metadatas)):
-                self.vector_store.add_embeddings(
-                    texts=[text],
-                    embeddings=[embeddings[i]],
-                    metadatas=[metadata]
-                )
-        else:
-            # Create new vector store
-            self.vector_store = FAISS(embedding_function=self.embed_texts, 
-                                     texts=all_texts, 
-                                     metadatas=all_metadatas)
-                                     
-        print(f"Vector store updated with {len(all_texts)} new document chunks")
+        Args:
+            csv_path: Path to the CSV file, if None, will generate from database
+            
+        Returns:
+            Success status
+        """
+        try:
+            # If no CSV path provided, create one from observations
+            if not csv_path:
+                csv_path = self.create_csv_from_observations()
+                
+                if not csv_path:
+                    print("Failed to create CSV file.")
+                    return False
+            
+            # Process the CSV into documents
+            documents = self.process_csv_data(csv_path)
+            
+            if not documents:
+                print("No documents extracted from CSV.")
+                return False
+            
+            print(f"Extracted {len(documents)} documents from CSV.")
+            
+            # Import documents into the rag_documents collection
+            for doc in documents:
+                # Check if a document for this observation already exists
+                existing = None
+                if "observation_id" in doc.metadata:
+                    existing = self.db.rag_documents.find_one({
+                        "metadata.observation_id": doc.metadata["observation_id"]
+                    })
+                
+                if existing:
+                    # Update existing document
+                    self.db.rag_documents.update_one(
+                        {"_id": existing["_id"]},
+                        {
+                            "$set": {
+                                "content": doc.page_content,
+                                "metadata": doc.metadata,
+                                "embedding": None,  # Will be computed later
+                                "updated_at": datetime.now()
+                            }
+                        }
+                    )
+                else:
+                    # Create new document
+                    self.db.rag_documents.insert_one({
+                        "content": doc.page_content,
+                        "metadata": doc.metadata,
+                        "embedding": None,  # Will be computed later
+                        "created_at": datetime.now(),
+                        "updated_at": datetime.now()
+                    })
+            
+            # Update embeddings
+            self.update_embeddings()
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error updating RAG from CSV: {str(e)}")
+            return False
