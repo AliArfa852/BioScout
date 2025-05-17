@@ -176,8 +176,6 @@ def qa():
     except Exception as e:
         return jsonify({"answer": f"An error occurred while processing your question: {str(e)}"}), 500
     
-
-    
 @app.route("/api/gamification", methods=["GET"])
 def gamification():
     from collections import Counter

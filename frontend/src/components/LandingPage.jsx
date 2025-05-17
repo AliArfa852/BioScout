@@ -35,87 +35,92 @@ const LandingPage = () => {
 
   // Data fetching using useCallback for memoization
   const fetchObservations = useCallback(async () => {
-    setLoading(prev => ({ ...prev, observations: true }));
-    setError(prev => ({ ...prev, observations: null }));
+  setLoading(prev => ({ ...prev, observations: true }));
+  setError(prev => ({ ...prev, observations: null }));
+  
+  try {
+    const response = await fetch("http://localhost:5000/api/observations");
     
-    try {
-      const response = await fetch("http://localhost:5000/api/observations");
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch observations: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      // Sort by date (newest first) and take only the most recent 10
-      const sortedData = data
-        .sort((a, b) => new Date(b.date_observed) - new Date(a.date_observed))
-        .slice(0, 10);
-      
-      setRecentObservations(sortedData);
-      
-      // Calculate statistics from observations data
-      const uniqueSpecies = new Set(data.map(obs => obs.species_name)).size;
-      const uniqueLocations = new Set(data.map(obs => obs.location)).size;
-      const uniqueUsers = new Set(data.map(obs => obs.observer)).size;
-      
-      setStats(prev => ({
-        ...prev,
-        uniqueSpecies,
-        uniqueLocations,
-        totalUsers: uniqueUsers
-      }));
-      
-      return data; // Return data for potential chaining
-    } catch (err) {
-      console.error("Error fetching observations:", err);
-      setError(prev => ({ ...prev, observations: err.message }));
-      return []; // Return empty array on error
-    } finally {
-      setLoading(prev => ({ ...prev, observations: false }));
+    if (!response.ok) {
+      throw new Error(`Failed to fetch observations: ${response.status}`);
     }
-  }, []);
+    
+    const data = await response.json();
+    
+    // Sort by date (newest first) and take only the most recent 10
+    const sortedData = data
+      .sort((a, b) => new Date(b.date_observed) - new Date(a.date_observed))
+      .slice(0, 10); // Always show only 10 most recent
+    
+    setRecentObservations(sortedData);
+    
+    // Calculate statistics from observations data
+    const uniqueSpecies = new Set(data.map(obs => obs.species_name)).size;
+    const uniqueLocations = new Set(data.map(obs => obs.location)).size;
+    const uniqueUsers = new Set(data.map(obs => obs.observer)).size;
+    
+    setStats(prev => ({
+      ...prev,
+      uniqueSpecies,
+      uniqueLocations,
+      totalUsers: uniqueUsers,
+      totalObservations: data.length // Add total observations count
+    }));
+    
+    return data;
+  } catch (err) {
+    console.error("Error fetching observations:", err);
+    setError(prev => ({ ...prev, observations: err.message }));
+    return [];
+  } finally {
+    setLoading(prev => ({ ...prev, observations: false }));
+  }
+}, []);
+  // const fetchAnalytics = useCallback(async () => {
+  //   setLoading(prev => ({ ...prev, stats: true }));
+  //   setError(prev => ({ ...prev, stats: null }));
+    
+  //   try {
+  //     const response = await fetch("http://localhost:5000/api/analytics");
+      
+  //     if (!response.ok) {
+  //       throw new Error(`Failed to fetch analytics: ${response.status}`);
+  //     }
+      
+  //     const data = await response.json();
+  //     console.log("Fetched analytics data:", data);
 
-  const fetchAnalytics = useCallback(async () => {
-    setLoading(prev => ({ ...prev, stats: true }));
-    setError(prev => ({ ...prev, stats: null }));
-    
-    try {
-      const response = await fetch("http://localhost:5000/api/analytics");
+  //     setStats(prev => ({
+  //       ...prev,
+  //       totalObservations: data.total_observations
+  //     }));
       
-      if (!response.ok) {
-        throw new Error(`Failed to fetch analytics: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      setStats(prev => ({
-        ...prev,
-        totalObservations: data.total_observations
-      }));
-      
-      return data;
-    } catch (err) {
-      console.error("Error fetching analytics:", err);
-      setError(prev => ({ ...prev, stats: err.message }));
-      return null;
-    } finally {
-      setLoading(prev => ({ ...prev, stats: false }));
-    }
-  }, []);
+  //     return data;
+  //   } catch (err) {
+  //     console.error("Error fetching analytics:", err);
+  //     setError(prev => ({ ...prev, stats: err.message }));
+  //     return null;
+  //   } finally {
+  //     setLoading(prev => ({ ...prev, stats: false }));
+  //   }
+  // }, []);
 
   // Initialize data on component mount
-  useEffect(() => {
-    const fetchData = async () => {
-      // Fetch observations and analytics in parallel
-      await Promise.all([
-        fetchObservations(),
-        fetchAnalytics()
-      ]);
-    };
+  // useEffect(() => {
+  //   const fetchData = async () => {
+  //     // Fetch observations and analytics in parallel
+  //     await Promise.all([
+  //       fetchObservations(),
+  //       fetchAnalytics()
+  //     ]);
+  //   };
     
-    fetchData();
-  }, [fetchObservations, fetchAnalytics]);
+  //   fetchData();
+  // }, [fetchObservations, fetchAnalytics]);
+
+  useEffect(() => {
+  fetchObservations();
+}, [fetchObservations]);
 
   // Form handlers
   const handleLoginChange = (e) => {
@@ -229,7 +234,7 @@ const LandingPage = () => {
         </div>
       </section>
 
-      {/* Stats Dashboard - New Section */}
+      {/* Stats Dashboard - New Section
       <section className="stats-dashboard">
         <h2 className="section-title">Our Biodiversity Impact</h2>
         {loading.stats ? (
@@ -253,6 +258,43 @@ const LandingPage = () => {
               <div className="stat-icon">🦉</div>
               <div className="stat-value">{stats.uniqueSpecies}</div>
               <div className="stat-label">Species</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon">🗺️</div>
+              <div className="stat-value">{stats.uniqueLocations}</div>
+              <div className="stat-label">Locations</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon">👥</div>
+              <div className="stat-value">{stats.totalUsers}</div>
+              <div className="stat-label">Contributors</div>
+            </div>
+          </div>
+        )}
+      </section> */}
+      <section className="stats-dashboard">
+        <h2 className="section-title">Our Biodiversity Impact</h2>
+        {loading.observations ? (
+          <div className="loading-container">
+            <div className="loading-spinner"></div>
+            <p className="loading-text">Loading community statistics...</p>
+          </div>
+        ) : error.observations ? (
+          <div className="error-container">
+            <p>Failed to load statistics: {error.observations}</p>
+            <button onClick={fetchObservations} className="btn primary">Retry</button>
+          </div>
+        ) : (
+          <div className="stats-cards">
+            <div className="stat-card">
+              <div className="stat-icon">🔍</div>
+              <div className="stat-value">{stats.totalObservations}</div>
+              <div className="stat-label">Total Observations</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon">🦉</div>
+              <div className="stat-value">{stats.uniqueSpecies}</div>
+              <div className="stat-label">Unique Species</div>
             </div>
             <div className="stat-card">
               <div className="stat-icon">🗺️</div>

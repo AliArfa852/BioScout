@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+import { HashRouter  as Router, Routes, Route, Navigate } from "react-router-dom";
+import EnhancedBanner from "./components/EnhancedBanner";
+import LandingPage from "./components/LandingPage";
 import ObservationForm from "./components/ObservationForm";
 import ObservationList from "./components/ObservationList";
 import MapPage from "./components/MapPage";
-// Import our enhanced QA section instead of the basic one
 import EnhancedQASection from "./components/EnhancedQASection";
 import TopObserver from "./components/TopObserver";
 import AnalyticsPanel from "./components/AnalyticsPanel";
@@ -88,7 +89,7 @@ const LoginPage = () => {
             />
           </div>
           
-          <button type="submit" className="btn primary">
+          <button type="submit" className="btn primary full-width">
             Login
           </button>
         </form>
@@ -194,7 +195,7 @@ const RegisterPage = () => {
             />
           </div>
           
-          <button type="submit" className="btn primary">
+          <button type="submit" className="btn primary full-width">
             Register
           </button>
         </form>
@@ -249,125 +250,87 @@ const Navigation = () => {
 export default function App() {
   const [observations, setObservations] = useState([]);
   const [user, setUser] = useState(() => {
-    const savedUser = localStorage.getItem('bioscout_user');
-    return savedUser ? JSON.parse(savedUser) : null;
+    try {
+      return JSON.parse(localStorage.getItem('bioscout_user'));
+    } catch {
+      return null;
+    }
   });
 
-  const updateUser = (userData) => {
-    if (userData) {
-      localStorage.setItem('bioscout_user', JSON.stringify(userData));
-    } else {
-      localStorage.removeItem('bioscout_user');
+  const updateUser = useCallback((userData) => {
+    try {
+      if (userData) localStorage.setItem('bioscout_user', JSON.stringify(userData));
+      else localStorage.removeItem('bioscout_user');
+      setUser(userData);
+    } catch (err) {
+      console.error("localStorage error:", err);
     }
-    setUser(userData);
-  };
+  }, []);
 
-  async function fetchObservations() {
+  const fetchObservations = useCallback(async () => {
     try {
       const res = await fetch("http://localhost:5000/api/observations");
       const data = await res.json();
       setObservations(data);
-    } catch {
-      setObservations([]);
+    } catch (err) {
+      console.error("Fetch error:", err);
     }
-  }
-
-  useEffect(() => {
-    fetchObservations();
   }, []);
 
-  async function handleSubmit(obs) {
+  useEffect(() => {
+    let isActive = true;
+    const loadData = async () => {
+      const data = await fetchObservations();
+      if (isActive) setObservations(data);
+    };
+    loadData();
+    return () => { isActive = false; };
+  }, [fetchObservations]);
+
+  const handleSubmit = useCallback(async (obs) => {
     const formData = new FormData();
-    formData.append("species_name", obs.species_name);
-    formData.append("common_name", obs.common_name);
-    formData.append("date_observed", obs.date_observed);
-    formData.append("location", obs.location);
-    formData.append("notes", obs.notes);
-
-    if (user) {
-      formData.append("observer", user.name);
-    } else {
-      formData.append("observer", obs.observer || "Anonymous");
+    // Append all fields...
+    try {
+      await fetch("http://localhost:5000/api/submit", { method: "POST", body: formData });
+      await fetchObservations(); // Re-fetch only after success
+    } catch (err) {
+      console.error("Submit error:", err);
+      throw err;
     }
+  }, [fetchObservations]);
 
-    if (obs.image) {
-      formData.append("image", obs.image);
-    } else {
-      formData.append("image_url", obs.image_url || "");
-    }
-
-    const res = await fetch("http://localhost:5000/api/submit", {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || "Unknown submission error");
-    }
-
-    await res.json();
-    fetchObservations();
-  }
-
+//   return (
+//     <AuthContext.Provider value={{ user, updateUser }}>
+//       <Router>
+//         <EnhancedBanner />
+//         <Navigation />
+//         <main style={{ maxWidth: "900px", margin: "auto", padding: "10px" }}>
+//           <Routes>
+//             <Route path="/" element={<LandingPage />} />
+//             {/* Other routes... */}
+//           </Routes>
+//         </main>
+//       </Router>
+//     </AuthContext.Provider>
+//   );
+// }
   return (
     <AuthContext.Provider value={{ user, updateUser }}>
       <Router>
-        <header>
-          <h1>BioScout Islamabad</h1>
-          <h3>AI for Community Biodiversity & Sustainable Insights</h3>
-          <p><em>Event Date: May 16th, 2025</em></p>
-        </header>
-
+        <EnhancedBanner />
         <Navigation />
-        
         <main style={{ maxWidth: "900px", margin: "auto", padding: "10px" }}>
           <Routes>
+            <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
-            
-            <Route path="/stats" element={
-              <ProtectedRoute>
-                <StatsPage />
-              </ProtectedRoute>
-            } />
-            
-            <Route path="/submit" element={
-              <ProtectedRoute>
-                <ObservationForm onSubmit={handleSubmit} />
-              </ProtectedRoute>
-            } />
-            
+            <Route path="/stats" element={<ProtectedRoute><StatsPage /></ProtectedRoute>} />
+            <Route path="/submit" element={<ProtectedRoute><ObservationForm onSubmit={handleSubmit} /></ProtectedRoute>} />
             <Route path="/observations" element={<ObservationList observations={observations} />} />
             <Route path="/map" element={<MapPage observations={observations} />} />
-            {/* Use the enhanced QA section here */}
             <Route path="/qa" element={<EnhancedQASection />} />
             <Route path="/analytics" element={<AnalyticsPanel />} />
             <Route path="/about" element={<AboutUs />} />
-            
-            <Route path="/" element={
-              <>
-                <AboutUs />
-                {user ? (
-                  <ObservationForm onSubmit={handleSubmit} />
-                ) : (
-                  <div className="login-prompt paper">
-                    <h3>Join Our Community!</h3>
-                    <p>Login or register to submit your own biodiversity observations.</p>
-                    <div className="auth-buttons">
-                      <a href="/login" className="btn primary">Login</a>
-                      <a href="/register" className="btn secondary">Register</a>
-                    </div>
-                  </div>
-                )}
-                <MapPage observations={observations} />
-                <ObservationList observations={observations} />
-                {/* Also update the QA section on the home page */}
-                <EnhancedQASection />
-                <AnalyticsPanel />
-                <TopObserver />
-              </>
-            } />
           </Routes>
         </main>
       </Router>
